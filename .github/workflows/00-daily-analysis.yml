@@ -2,7 +2,7 @@ name: 每日股票分析
 
 on:
   schedule:
-    # UTC 時間每日 0:00 執行 (台灣時間上午 8:00)
+    # UTC 時間每日 0:00 執行 (對應台灣時間上午 8:00)
     - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
@@ -16,7 +16,7 @@ on:
           - stocks-only
           - market-only
       force_run:
-        description: '强制运行（跳过交易日检查）'
+        description: '強制運行（跳過交易日檢查）'
         required: false
         default: false
         type: boolean
@@ -45,18 +45,18 @@ jobs:
 
       - name: 執行股票分析與推播
         env:
-          # API Key 與 Telegram 設定
+          # API 金鑰與 Telegram 設定
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           
-          # 股票與市場設定 (優先讀取 Variables/Secrets，否則使用預設值)
+          # 股票與市場設定 (讀取 Variables 或 Secrets，預設分析台股)
           STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '0056.TW' }}
           MARKET_REVIEW_REGION: ${{ vars.MARKET_REVIEW_REGION || secrets.MARKET_REVIEW_REGION || 'tw' }}
           
-          # 觸發條件控制
+          # 觸發模式與強制執行控制
           ANALYSIS_MODE: ${{ inputs.analysis_mode || 'full' }}
           FORCE_RUN: ${{ inputs.force_run || false }}
         run: |
-          echo "開始執行股票分析..."
+          echo "開始執行股票分析任務..."
           python main.py
