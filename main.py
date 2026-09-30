@@ -41,24 +41,36 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str):
     except Exception as e:
         logging.error(f"Telegram 推播失敗: {e}")
 
-# 2. 呼叫 Gemini AI (採用最新支援模型)
+# 2. 呼叫 Gemini AI (自動查詢帳號可用模型)
 def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str:
     display_name = get_display_name(symbol)
     
     if not api_key:
         return f"🟡 {display_name} ({symbol})\n\n⚠️ 未讀取到 GEMINI_API_KEY，請檢查 GitHub Secrets。"
 
-    # 使用目前最新的 Google Gemini API 活躍模型
-    candidate_models = [
-        'gemini-2.5-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-2.0-flash',
-        'gemini-1.5-pro'
-    ]
-
-    genai.configure(api_key=api_key)
-    
-    prompt = f"""
+    try:
+        genai.configure(api_key=api_key)
+        
+        # 自動列出該 API Key 目前權限下所有支援生成內容的模型
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        # 若完全找不到可用模型
+        if not available_models:
+            return f"🟡 {display_name} ({symbol})\n\n⚠️ API Key 無可用模型！請檢查 Google AI Studio 帳號狀態。"
+            
+        # 優先選取包含 flash 或 pro 的模型，否則使用第一個可用模型
+        selected_model = available_models[0]
+        for name in available_models:
+            if 'flash' in name:
+                selected_model = name
+                break
+                
+        model = genai.GenerativeModel(selected_model)
+        
+        prompt = f"""
 你是一位專業的台灣證券分析師。請根據以下【{display_name} ({symbol})】的近期數據進行簡短分析。
 
 【語言與用語嚴格規範】
@@ -82,22 +94,13 @@ def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str
 【數據】
 {stock_data}
 """
+        response = model.generate_content(prompt)
+        return response.text
 
-    last_error = ""
-    for model_name in candidate_models:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            if response and response.text:
-                return response.text
-        except Exception as e:
-            last_error = f"{type(e).__name__}: {str(e)}"
-            logging.warning(f"嘗試模型 {model_name} 失敗 ({symbol}): {last_error}")
-            continue
-
-    # 若所有模型都失敗才回傳錯誤
-    logging.error(f"Gemini 所有模型呼叫均失敗 ({symbol}): {last_error}")
-    return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：`{last_error}`"
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        logging.error(f"Gemini 呼叫失敗 ({symbol}): {error_msg}")
+        return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：`{error_msg}`"
 
 # 3. 主程序
 def main():
