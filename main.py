@@ -41,7 +41,7 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str):
     except Exception as e:
         logging.error(f"Telegram 推播失敗: {e}")
 
-# 2. 呼叫 Gemini AI (多模型備用機制)
+# 2. 呼叫 Gemini AI (使用 gemini-2.5-flash)
 def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str:
     display_name = get_display_name(symbol)
     
@@ -75,8 +75,8 @@ def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str
 
     genai.configure(api_key=api_key)
     
-    # 優先嘗試免費配額最多的 gemini-1.5-flash 或 gemini-2.0-flash
-    candidate_models = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-3.8-flash']
+    # 嘗試預設最穩定、免費額度最多的 gemini-2.5-flash，若失敗則備用 gemini-2.0-flash
+    candidate_models = ['gemini-2.5-flash', 'gemini-2.0-flash']
 
     for model_name in candidate_models:
         try:
@@ -86,13 +86,17 @@ def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str
         except Exception as e:
             error_str = str(e)
             if "429" in error_str or "ResourceExhausted" in error_str:
-                logging.warning(f"[{symbol}] 模型 {model_name} 達到額度限制，嘗試下一個備用模型...")
+                logging.warning(f"[{symbol}] {model_name} 觸發速率限制，等待 10 秒後重試...")
+                time.sleep(10)
+                continue
+            elif "404" in error_str:
+                logging.warning(f"[{symbol}] 模型 {model_name} 不存在，切換下一個模型...")
                 continue
             else:
                 logging.error(f"Gemini 呼叫失敗 ({symbol}): {error_str}")
                 return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：`{error_str}`"
 
-    return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：今日所有 Gemini 免費模型額度皆已用盡，請等待明日重置。"
+    return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：所有備用模型皆無法存取，請檢查 API Key 權限。"
 
 # 3. 主程序
 def main():
@@ -119,8 +123,8 @@ def main():
             report = analyze_stock_with_gemini(gemini_key, symbol, stock_summary)
             send_telegram_message(tg_token, tg_chat_id, report)
             
-            # 每檔股票間隔 5 秒
-            time.sleep(5)
+            # 間隔 6 秒以符合每分鐘 15 次的免費呼叫頻率
+            time.sleep(6)
             
         except Exception as e:
             logging.error(f"處理 {symbol} 出錯: {e}")
