@@ -18,6 +18,10 @@ STOCK_NAME_MAP = {
     "2330.TW": "台積電",
     "2317.TW": "鴻海",
     "2454.TW": "聯發科",
+    "2409.TW": "友達",
+    "3481.TW": "群創",
+    "4770.TW": "祥 we (祥碩/精材等)",
+    "6116.TW": "彩晶",
     "NVDA": "輝達 (NVIDIA)",
     "AAPL": "蘋果 (Apple)",
     "TSLA": "特斯拉 (Tesla)",
@@ -38,18 +42,24 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str):
     except Exception as e:
         logging.error(f"Telegram 推播失敗: {e}")
 
-# 2. 呼叫 Gemini AI (帶有錯誤捕捉增強)
+# 2. 呼叫 Gemini AI (具備模型自動切換備援)
 def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str:
     display_name = get_display_name(symbol)
     
     if not api_key:
         return f"🟡 {display_name} ({symbol})\n\n⚠️ 未讀取到 GEMINI_API_KEY，請檢查 GitHub Secrets。"
 
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        prompt = f"""
+    # 嘗試多個可能相容的模型代號
+    candidate_models = [
+        'gemini-1.5-flash-latest',
+        'gemini-2.5-flash',
+        'gemini-1.5-flash',
+        'gemini-pro'
+    ]
+
+    genai.configure(api_key=api_key)
+    
+    prompt = f"""
 你是一位專業的台灣證券分析師。請根據以下【{display_name} ({symbol})】的近期數據進行簡短分析。
 
 【語言與用語嚴格規範】
@@ -73,14 +83,22 @@ def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str
 【數據】
 {stock_data}
 """
-        response = model.generate_content(prompt)
-        return response.text
 
-    except Exception as e:
-        # 印出詳細錯誤至 Log，並把錯誤訊息直接回傳給 Telegram
-        error_msg = f"{type(e).__name__}: {str(e)}"
-        logging.error(f"Gemini API 呼叫失敗 ({symbol}): {error_msg}")
-        return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：`{error_msg}`"
+    last_error = ""
+    for model_name in candidate_models:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {str(e)}"
+            logging.warning(f"嘗試模型 {model_name} 失敗 ({symbol}): {last_error}")
+            continue
+
+    # 若所有模型都失敗才回傳錯誤
+    logging.error(f"Gemini 所有模型呼叫均失敗 ({symbol}): {last_error}")
+    return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：`{last_error}`"
 
 # 3. 主程序
 def main():
