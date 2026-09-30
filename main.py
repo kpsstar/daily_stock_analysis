@@ -5,8 +5,10 @@ import requests
 import yfinance as yf
 import google.generativeai as genai
 
+# 設定 Logging 紀錄
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# 1. 常見台股與美股中文名稱對照表
 STOCK_NAME_MAP = {
     "0056.TW": "元大高股息",
     "00878.TW": "國泰永續高股息",
@@ -36,14 +38,18 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str):
     except Exception as e:
         logging.error(f"Telegram 推播失敗: {e}")
 
+# 2. 呼叫 Gemini AI (帶有錯誤捕捉增強)
 def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str:
-    genai.configure(api_key=api_key)
-    # 使用目前最穩定的免費模型
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    
     display_name = get_display_name(symbol)
     
-    prompt = f"""
+    if not api_key:
+        return f"🟡 {display_name} ({symbol})\n\n⚠️ 未讀取到 GEMINI_API_KEY，請檢查 GitHub Secrets。"
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"""
 你是一位專業的台灣證券分析師。請根據以下【{display_name} ({symbol})】的近期數據進行簡短分析。
 
 【語言與用語嚴格規範】
@@ -67,21 +73,24 @@ def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str
 【數據】
 {stock_data}
 """
-    try:
         response = model.generate_content(prompt)
         return response.text
-    except Exception as e:
-        logging.error(f"Gemini 呼叫失敗 ({symbol}): {e}")
-        return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析產生失敗，請檢查 API Key 或配額。"
 
+    except Exception as e:
+        # 印出詳細錯誤至 Log，並把錯誤訊息直接回傳給 Telegram
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        logging.error(f"Gemini API 呼叫失敗 ({symbol}): {error_msg}")
+        return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：`{error_msg}`"
+
+# 3. 主程序
 def main():
     gemini_key = os.getenv("GEMINI_API_KEY")
     tg_token = os.getenv("TELEGRAM_BOT_TOKEN")
     tg_chat_id = os.getenv("TELEGRAM_CHAT_ID")
     raw_stock_list = os.getenv("STOCK_LIST", "0056.TW")
     
-    if not all([gemini_key, tg_token, tg_chat_id]):
-        logging.error("缺少必要密鑰！請檢查 Secrets 設定。")
+    if not all([tg_token, tg_chat_id]):
+        logging.error("缺少必要密鑰！請檢查 Secrets 設定 (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)")
         return
 
     stocks = [s.strip() for s in raw_stock_list.replace(";", ",").split(",") if s.strip()]
@@ -98,7 +107,7 @@ def main():
             report = analyze_stock_with_gemini(gemini_key, symbol, stock_summary)
             send_telegram_message(tg_token, tg_chat_id, report)
             
-            # 每分析完一支股票暫停 3 秒，防止觸發 Gemini API 頻率限制
+            # 冷卻 3 秒避開 Rate Limit
             time.sleep(3)
             
         except Exception as e:
