@@ -41,7 +41,7 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str):
     except Exception as e:
         logging.error(f"Telegram 推播失敗: {e}")
 
-# 2. 呼叫 Gemini AI (內建 429 自動重試機制)
+# 2. 呼叫 Gemini AI (多模型備用機制)
 def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str:
     display_name = get_display_name(symbol)
     
@@ -74,25 +74,25 @@ def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str
 """
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-3.8-flash')
+    
+    # 優先嘗試免費配額最多的 gemini-1.5-flash 或 gemini-2.0-flash
+    candidate_models = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-3.8-flash']
 
-    # 最多重試 3 次
-    max_retries = 3
-    for attempt in range(max_retries):
+    for model_name in candidate_models:
         try:
+            model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
-            # 判斷是否為 429 頻率限制
             if "429" in error_str or "ResourceExhausted" in error_str:
-                if attempt < max_retries - 1:
-                    logging.warning(f"[{symbol}] 觸發 Rate Limit (429)，等待 15 秒後進行第 {attempt + 2} 次重試...")
-                    time.sleep(15)  # 被限制時等待 15 秒
-                    continue
-            
-            logging.error(f"Gemini 呼叫失敗 ({symbol}): {error_str}")
-            return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：`{error_str}`"
+                logging.warning(f"[{symbol}] 模型 {model_name} 達到額度限制，嘗試下一個備用模型...")
+                continue
+            else:
+                logging.error(f"Gemini 呼叫失敗 ({symbol}): {error_str}")
+                return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：`{error_str}`"
+
+    return f"🟡 {display_name} ({symbol})\n\n⚠️ AI 分析失敗\n錯誤原因：今日所有 Gemini 免費模型額度皆已用盡，請等待明日重置。"
 
 # 3. 主程序
 def main():
@@ -119,8 +119,8 @@ def main():
             report = analyze_stock_with_gemini(gemini_key, symbol, stock_summary)
             send_telegram_message(tg_token, tg_chat_id, report)
             
-            # 每檔股票分析完畢後預設基礎冷卻 13 秒
-            time.sleep(13)
+            # 每檔股票間隔 5 秒
+            time.sleep(5)
             
         except Exception as e:
             logging.error(f"處理 {symbol} 出錯: {e}")
