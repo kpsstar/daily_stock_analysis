@@ -20,7 +20,6 @@ STOCK_NAME_MAP = {
     "2454.TW": "聯發科",
     "2409.TW": "友達",
     "3481.TW": "群創",
-    "4770.TW": "祥 we (祥碩/精材等)",
     "6116.TW": "彩晶",
     "NVDA": "輝達 (NVIDIA)",
     "AAPL": "蘋果 (Apple)",
@@ -42,19 +41,19 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str):
     except Exception as e:
         logging.error(f"Telegram 推播失敗: {e}")
 
-# 2. 呼叫 Gemini AI (具備模型自動切換備援)
+# 2. 呼叫 Gemini AI (採用最新支援模型)
 def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str:
     display_name = get_display_name(symbol)
     
     if not api_key:
         return f"🟡 {display_name} ({symbol})\n\n⚠️ 未讀取到 GEMINI_API_KEY，請檢查 GitHub Secrets。"
 
-    # 嘗試多個可能相容的模型代號
+    # 使用目前最新的 Google Gemini API 活躍模型
     candidate_models = [
-        'gemini-1.5-flash-latest',
         'gemini-2.5-flash',
-        'gemini-1.5-flash',
-        'gemini-pro'
+        'gemini-1.5-flash-latest',
+        'gemini-2.0-flash',
+        'gemini-1.5-pro'
     ]
 
     genai.configure(api_key=api_key)
