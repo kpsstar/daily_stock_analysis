@@ -41,7 +41,7 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str):
     except Exception as e:
         logging.error(f"Telegram 推播失敗: {e}")
 
-# 2. 呼叫 Gemini AI (自動查詢帳號可用模型)
+# 2. 呼叫 Gemini AI (指定最新的 gemini-3.8-flash)
 def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str:
     display_name = get_display_name(symbol)
     
@@ -51,24 +51,8 @@ def analyze_stock_with_gemini(api_key: str, symbol: str, stock_data: str) -> str
     try:
         genai.configure(api_key=api_key)
         
-        # 自動列出該 API Key 目前權限下所有支援生成內容的模型
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-        
-        # 若完全找不到可用模型
-        if not available_models:
-            return f"🟡 {display_name} ({symbol})\n\n⚠️ API Key 無可用模型！請檢查 Google AI Studio 帳號狀態。"
-            
-        # 優先選取包含 flash 或 pro 的模型，否則使用第一個可用模型
-        selected_model = available_models[0]
-        for name in available_models:
-            if 'flash' in name:
-                selected_model = name
-                break
-                
-        model = genai.GenerativeModel(selected_model)
+        # 使用 Google 提示說明的最新指定模型
+        model = genai.GenerativeModel('gemini-3.8-flash')
         
         prompt = f"""
 你是一位專業的台灣證券分析師。請根據以下【{display_name} ({symbol})】的近期數據進行簡短分析。
