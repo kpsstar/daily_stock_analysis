@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import logging
 import requests
 import yfinance as yf
@@ -38,24 +39,34 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str):
         logging.error(f"Telegram 推播失敗: {e}")
 
 def analyze_batch_with_gemini(api_key: str, batch_data: list) -> list:
-    """單次 API 呼叫，一次處理多檔股票（內建 429 退避重試）"""
+    """單次 API 呼叫，強迫回傳 JSON 格式以確保 100% 完整解析"""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-3.8-flash')
 
+    target_symbols = [symbol for symbol, _ in batch_data]
     combined_text = ""
     for symbol, data in batch_data:
         display_name = get_display_name(symbol)
         combined_text += f"\n--- 【{display_name} ({symbol})】 ---\n{data}\n"
 
     prompt = f"""
-你是一位專業的台灣證券分析師。請針對以下多檔股票數據分別進行簡短分析。
+你是一位專業的台灣證券分析師。
+請針對傳入的 {len(target_symbols)} 檔股票（{', '.join(target_symbols)}）進行分析。
 
-【語言與用語規範】
-1. 必須全程使用【台灣繁體中文（zh-TW）】。
-2. 財經術語：禁用「信息、信息速覽、輿情情緒、大盤複盤、收益率」，採用「訊息/資訊、重點資訊速覽、市場情緒、大盤盤後分析、殖利率/報酬率」。
-3. 請依照每檔股票獨立輸出以下格式，各股票間用「===」分隔。
+【重要任務】：
+你必須為【每一檔股票】生成一份獨立報告，並以 JSON 陣列（JSON Array）格式回傳，格式如下：
+[
+  {{
+    "symbol": "股票代碼",
+    "report": "格式化後的 Markdown 報告內容"
+  }}
+]
 
-【格式】
+【報告語氣與用語規範】
+1. 全程使用【台灣繁體中文（zh-TW）】。
+2. 禁用大陸用語（如：信息、舆情、复盘、收益率），採用「訊息/資訊、市場情緒、盤後分析、殖利率」。
+
+【單檔 Markdown 內容格式 (寫在 report 欄位內)】：
 🟡 [股票名稱] ([代碼])
 
 📰 重要資訊速覽
@@ -66,27 +77,29 @@ def analyze_batch_with_gemini(api_key: str, batch_data: list) -> list:
 * 當前趨勢：[簡短分析]
 * 操作重點：[簡短分析]
 
-===
-
-【股票數據清單】
+【待分析數據】
 {combined_text}
 """
 
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            response = model.generate_content(prompt)
-            reports = response.text.split("===")
-            return [r.strip() for r in reports if r.strip()]
+            # 強制要求 JSON 輸出模式
+            response = model.generate_content(
+                prompt,
+                generation_config={"response_mime_type": "application/json"}
+            )
+            data = json.loads(response.text)
+            return [item.get("report", "") for item in data if item.get("report")]
         except Exception as e:
             error_str = str(e)
             if "429" in error_str or "ResourceExhausted" in error_str:
                 if attempt < max_retries - 1:
-                    logging.warning(f"觸發 RPM 限制 (429)，等待 20 秒後進行第 {attempt + 2} 次重試...")
-                    time.sleep(20)  # 被限制時自動暫停 20 秒再試
+                    logging.warning(f"觸發頻率限制 (429)，冷卻 20 秒...")
+                    time.sleep(20)
                     continue
-            logging.error(f"Gemini 批量分析失敗: {error_str}")
-            return [f"⚠️ 批量分析失敗：`{error_str}`"]
+            logging.error(f"Gemini 批量分析解析失敗: {error_str}")
+            return [f"⚠️ 分析失敗：`{error_str}`"]
 
 def main():
     gemini_key = os.getenv("GEMINI_API_KEY")
@@ -99,8 +112,8 @@ def main():
         return
 
     stocks = [s.strip() for s in raw_stock_list.replace(";", ",").split(",") if s.strip()]
+    logging.info(f"📋 準備分析的 STOCK_LIST ({len(stocks)} 檔): {stocks}")
     
-    # 抓取所有股票歷史資料
     collected_data = []
     for symbol in stocks:
         try:
@@ -109,11 +122,15 @@ def main():
             if not hist.empty:
                 summary = hist[['Open', 'High', 'Low', 'Close', 'Volume']].tail(3).to_string()
                 collected_data.append((symbol, summary))
+            else:
+                logging.warning(f"⚠️ {symbol} 沒抓到歷史數據，使用預設代碼替代")
+                collected_data.append((symbol, "無近期交易歷史數據"))
         except Exception as e:
             logging.error(f"抓取 {symbol} 失敗: {e}")
+            collected_data.append((symbol, "數據抓取異常"))
 
-    # 以 5 檔股票為一組打包
-    batch_size = 5
+    # 以 3~5 檔為一組做 Batch 打包
+    batch_size = 4
     for i in range(0, len(collected_data), batch_size):
         batch = collected_data[i:i + batch_size]
         reports = analyze_batch_with_gemini(gemini_key, batch)
@@ -122,8 +139,7 @@ def main():
             send_telegram_message(tg_token, tg_chat_id, r)
             time.sleep(1)
             
-        # 批次之間安全冷卻 15 秒（避免超過每分鐘 5 次 RPM）
-        time.sleep(15)
+        time.sleep(15) # 批次間隔冷卻
 
 if __name__ == "__main__":
     main()
