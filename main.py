@@ -38,7 +38,7 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str):
         logging.error(f"Telegram 推播失敗: {e}")
 
 def analyze_batch_with_gemini(api_key: str, batch_data: list) -> list:
-    """單次 API 呼叫，一次處理多檔股票"""
+    """單次 API 呼叫，一次處理多檔股票（內建 429 退避重試）"""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-3.8-flash')
 
@@ -52,7 +52,7 @@ def analyze_batch_with_gemini(api_key: str, batch_data: list) -> list:
 
 【語言與用語規範】
 1. 必須全程使用【台灣繁體中文（zh-TW）】。
-2. 財經術語：禁用「信息、信息速览、舆情情绪、大盘复盘、收益率」，採用「訊息/資訊、重點資訊速覽、市場情緒、大盤盤後分析、殖利率/報酬率」。
+2. 財經術語：禁用「信息、信息速覽、輿情情緒、大盤複盤、收益率」，採用「訊息/資訊、重點資訊速覽、市場情緒、大盤盤後分析、殖利率/報酬率」。
 3. 請依照每檔股票獨立輸出以下格式，各股票間用「===」分隔。
 
 【格式】
@@ -72,14 +72,21 @@ def analyze_batch_with_gemini(api_key: str, batch_data: list) -> list:
 {combined_text}
 """
 
-    try:
-        response = model.generate_content(prompt)
-        # 依分隔符切分回傳結果
-        reports = response.text.split("===")
-        return [r.strip() for r in reports if r.strip()]
-    except Exception as e:
-        logging.error(f"Gemini 批量分析失敗: {e}")
-        return [f"⚠️ 批量分析失敗：`{e}`"]
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            reports = response.text.split("===")
+            return [r.strip() for r in reports if r.strip()]
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "ResourceExhausted" in error_str:
+                if attempt < max_retries - 1:
+                    logging.warning(f"觸發 RPM 限制 (429)，等待 20 秒後進行第 {attempt + 2} 次重試...")
+                    time.sleep(20)  # 被限制時自動暫停 20 秒再試
+                    continue
+            logging.error(f"Gemini 批量分析失敗: {error_str}")
+            return [f"⚠️ 批量分析失敗：`{error_str}`"]
 
 def main():
     gemini_key = os.getenv("GEMINI_API_KEY")
@@ -105,7 +112,7 @@ def main():
         except Exception as e:
             logging.error(f"抓取 {symbol} 失敗: {e}")
 
-    # 以 5 檔股票為一組（Batch）打包發送
+    # 以 5 檔股票為一組打包
     batch_size = 5
     for i in range(0, len(collected_data), batch_size):
         batch = collected_data[i:i + batch_size]
@@ -115,7 +122,8 @@ def main():
             send_telegram_message(tg_token, tg_chat_id, r)
             time.sleep(1)
             
-        time.sleep(10) # 每批次間隔 10 秒
+        # 批次之間安全冷卻 15 秒（避免超過每分鐘 5 次 RPM）
+        time.sleep(15)
 
 if __name__ == "__main__":
     main()
